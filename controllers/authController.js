@@ -1,89 +1,4 @@
-// const User = require('../models/User');
-// const ErrorResponse = require('../utils/appError');
-// const asyncHandler = require('../utils/async');
 
-// // @desc    Register user
-// // @route   POST /api/v1/auth/register
-// // @access  Public
-// exports.register = asyncHandler(async (req, res, next) => {
-//     console.log(req.body)
-//   const { name, email, password, role } = req.body;
-
-//   // Create user
-//   const user = await User.create({
-//     name,
-//     email,
-//     password,
-//     role
-//   });
-
-//   sendTokenResponse(user, 200, res);
-// });
-
-// // @desc    Login user
-// // @route   POST /api/v1/auth/login
-// // @access  Public
-// exports.login = asyncHandler(async (req, res, next) => {
-//   const { email, password } = req.body;
-
-//   // Validate email & password
-//   if (!email || !password) {
-//     return next(new ErrorResponse('Please provide an email and password', 400));
-//   }
-
-//   // Check for user
-//   const user = await User.findOne({ email }).select('+password');
-
-//   if (!user) {
-//     return next(new ErrorResponse('Invalid credentials', 401));
-//   }
-
-//   // Check if password matches
-//   const isMatch = await user.matchPassword(password);
-
-//   if (!isMatch) {
-//     return next(new ErrorResponse('Invalid credentials', 401));
-//   }
-
-//   sendTokenResponse(user, 200, res);
-// });
-
-// // Get token from model, create cookie and send response
-// const sendTokenResponse = (user, statusCode, res) => {
-//   // Create token
-//   const token = user.getSignedJwtToken();
-
-//   const options = {
-//     expires: new Date(
-//       Date.now() + process.env.JWT_COOKIE_EXPIRE * 24 * 60 * 60 * 1000
-//     ),
-//     httpOnly: true
-//   };
-
-//   if (process.env.NODE_ENV === 'production') {
-//     options.secure = true;
-//   }
-
-//   res
-//     .status(statusCode)
-//     .cookie('token', token, options)
-//     .json({
-//       success: true,
-//       token
-//     });
-// };
-
-// // @desc    Get current logged in user
-// // @route   GET /api/v1/auth/me
-// // @access  Private
-// exports.getMe = asyncHandler(async (req, res, next) => {
-//   const user = await User.findById(req.user.id);
-
-//   res.status(200).json({
-//     success: true,
-//     data: user
-//   });
-// });
 
 
 const User = require('../models/User');
@@ -92,6 +7,7 @@ const asyncHandler = require('../utils/async');
 const nodemailer = require('nodemailer');
 const validator = require('validator');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');  // Add this line
 
 // Create reusable transporter object using SMTP transport
 const transporter = nodemailer.createTransport({
@@ -322,6 +238,82 @@ const sendTokenResponse = (user, statusCode, res, message = '') => {
       }
     });
 };
+
+
+
+// @desc    Reset password
+// @route   PUT /api/v1/auth/resetpassword/:resettoken
+// @access  Public
+exports.resetPassword = asyncHandler(async (req, res, next) => {
+  // 1. Hash the token from URL
+  const resetPasswordToken = crypto
+    .createHash('sha256')
+    .update(req.params.resetToken)
+    .digest('hex');
+
+  // 2. Find user with matching token
+  const user = await User.findOne({
+    resetPasswordToken,
+    resetPasswordExpire: { $gt: Date.now() }
+  });
+
+  if (!user) {
+    return next(new ErrorResponse('Invalid or expired token', 400));
+  }
+
+  // 3. Set new password and clear reset fields
+  user.password = req.body.password;
+  user.resetPasswordToken = undefined;
+  user.resetPasswordExpire = undefined;
+  await user.save();
+
+  // 4. Send confirmation email
+  const mailOptions = {
+    from: `"${process.env.EMAIL_FROM_NAME}" <${process.env.EMAIL_FROM_ADDRESS}>`,
+    to: user.email,
+    subject: 'Password Changed Successfully',
+    html: `
+      <h2>Password Update Confirmation</h2>
+      <p>Your password was successfully changed on ${new Date().toLocaleString()}.</p>
+      <p>If you didn't make this change, please contact support immediately.</p>
+      <hr>
+      <p>Security Tip: Never share your password with anyone.</p>
+    `
+  };
+
+  try {
+    await transporter.sendMail(mailOptions);
+  } catch (err) {
+    console.error('Password change email failed:', err);
+    // Don't fail the request - just log the error
+  }
+
+  // 5. Send token response
+  sendTokenResponse(user, 200, res, 'Password reset successful. Confirmation email sent.');
+});
+
+
+
+
+
+
+// @desc    Log out user (clear cookie)
+// @route   GET /api/v1/auth/logout
+// @access  Public
+exports.logout = asyncHandler(async (req, res, next) => {
+  res.cookie('token', 'none', {
+    expires: new Date(Date.now() + 10 * 1000),  // expires in 10 seconds
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'strict'
+  });
+
+  res.status(200).json({
+    success: true,
+    message: 'User logged out successfully'
+  });
+});
+
 
 
 
